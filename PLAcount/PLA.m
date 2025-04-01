@@ -2,6 +2,14 @@ close all
 clear all
 clc
 
+%% Selecting the DAPI and PLA channels
+% 1 - RED
+% 2 - GREEN
+% 3 - BLUE
+
+PLA = 1; %PLA signal is by default RED (1) channel
+DAPI = 3; %DAPI signal is by default BLUE (3) channel
+
 %% Loading files
 data = loadPLAfiles(); %load files
 PLAdata = struct([]); %allocate struct for output data
@@ -27,39 +35,39 @@ for i = 1:n
     else
         imgPLA = im2double(data{i}); %get image
     end
-    REDch = imgPLA(:,:,1); %pick red channel
-    BLUEch = imgPLA(:,:,3); %pick blue channel
-
+    REDch = imgPLA(:,:,PLA); %pick PLA channel
+    BLUEch = imgPLA(:,:,DAPI); %pick DAPI channel
+    
+%% Adding artificial blur
+%     REDch = imnoise(REDch,'gaussian', 0.01);
+%     BLUEch = imnoise(BLUEch,'gaussian', 0.01);
+    
+%% Gaussian blur
+    REDch = medfilt2(REDch);
+    REDch = conv2(REDch, blurMaskGauss, 'same'); %convolution with gaussian blur mask
+    BLUEch = conv2(BLUEch, blurMaskAverage, 'same'); %convolution with average blur mask
+    
 %% Normalization [0-1]
     REDch = REDch-min(min(REDch));
     REDch = REDch./max(max(REDch));
     BLUEch = BLUEch-min(min(BLUEch));
     BLUEch = BLUEch./max(max(BLUEch));
-    
-%% Adding artificial blur
-    REDch = imnoise(REDch,'gaussian', 0.01);
-    BLUEch = imnoise(BLUEch,'gaussian', 0.01);
-    
-%% Gaussian blur
-    REDch = medfilt2(REDch);
-    REDch = imgaussfilt(REDch, 1.5);
-    BLUEch = imgaussfilt(BLUEch, 2);
 
 %% Obtaining DAPI mask
-    otsuThreshBLUE = graythresh(BLUEch)/2; %global threshold as a half of optimal Otsu threshold
-    maskDAPI = im2bw(BLUEch, otsuThreshBLUE); %thresholding
+    otsuDapiThresh = graythresh(BLUEch)/2; %global threshold as a half of optimal Otsu threshold
+    maskDAPI = im2bw(BLUEch, otsuDapiThresh); %thresholding
     maskDAPI = imfill(maskDAPI,'holes'); %filling holes
     maskDAPI = imopen(maskDAPI, strel('disk', 5)); %opening image
     maskDAPI = imclearborder(maskDAPI); %removing nuclei that intersect with the image edge
     maskDAPI = bwareaopen(maskDAPI, length(maskDAPI(:,1))); %select only regions with more pixels than width of the image
 
 %% Obtaining PLA signal only from nucleus
-    otsuThreshRED = graythresh(REDch); %global threshold as a half of optimal Otsu threshold
-    PLAsignal = REDch.*(im2bw(REDch, otsuThreshRED * 2)); %subtract the background with global Otsu threshold   
-    PLAsignal = PLAsignal.*maskDAPI; %multiply the DAPI mask with PLA signal
-    PLAsignal = imopen(PLAsignal, strel('disk', 1)); %opening image
+    PLAsignal = REDch.*maskDAPI; %multiply the DAPI mask with RED channel
+    plaThresh = mean(mean(PLAsignal(maskDAPI))) + graythresh(PLAsignal(maskDAPI)); %mean value + otsu of PLA signal within the nuclei
+    PLAsignal = REDch.*(im2bw(PLAsignal, plaThresh)); %subtract the background with plaThresh
+%     PLAsignal = imopen(PLAsignal, strel('disk', 1)); %opening image
     localMaxima = imregionalmax(PLAsignal, 8); %obtain local maxima
-    
+
 %% Watershed segmentation
     inverseGradientMap = imhmin(1-bwdist(~maskDAPI), 6); %distance transform of binary image (negative nucleus) and supressing of regional minima
     segmentedRegions = watershed(inverseGradientMap); %watershed segmentation
@@ -88,6 +96,7 @@ AveragePLAforNuclei = double(sum(vecPLA))/double(length(vecPLA)); %count average
 nucleusSegmentedImage = zeros(size(imgPLA));
 nucleusSegmentedImage(:,:,3) = maskDAPI.*BLUEch;
 nucleusSegmentedImage(:,:,2) = segmentedRegions == 0;
+nucleusSegmentedImage(:,:,2) = nucleusSegmentedImage(:,:,2) + localMaxima;
 nucleusSegmentedImage(:,:,1) = REDch;
 
 %% Figures
